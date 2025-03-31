@@ -1,0 +1,12 @@
+# Ignore the private key file
+rdrama_auth_token
+
+# Ignore common Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+*.venv
+.env
+.venv
