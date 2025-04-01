@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import requests
 import time
 import math
@@ -8,7 +10,6 @@ from selenium import webdriver
 from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
-
 
 
 ## TODO: I am counting child nodes for reply count, but we should find all children of these nodes and use THAT as
@@ -53,13 +54,15 @@ def get_slugified_url(url, driver_path=r'C:\Program Files\WebDriver_proj\msedged
         # Close the driver
         driver.quit()
 
-def get_posts(from_id=None, sort='new', community=None):
+
+def get_posts(from_id=None, sort='new', community=None, rate_limit_s=1):
     url = "https://scored.co/api/v2/post/" + sort + "v2.json"
     params = {
         'community': community,
         'from': from_id if from_id else '',
     }
     response = requests.get(url, params=params)
+    time.sleep(rate_limit_s)  # 600 / 10 minutes, or 1 / second
     return response.json() if response.status_code == 200 else None
 
 
@@ -79,9 +82,20 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
 
     all_posts = []
     from_id = None
-
+    next_copy = -1
+    post_hour_prev = 0
     while True:
-        data = get_posts(from_id, community=community, sort='new')  # gather page of posts from new starting at last
+        data = get_posts(from_id, community=community, sort='new')
+        if not data['has_more_entries']:  # if has_more_entries is false the data we got is bad, we can pull from a different index
+            next_copy -= 1
+            print(f"No more entries: {data}\nTrying {next_copy}")  # gather page of posts from new starting at last
+            from_id = all_posts[next_copy]['uuid']
+            print(f"Couldn't fetch from {community} past {post_hour_prev}")
+            print(f"New uuid: {from_id}")
+            return all_posts   # above  doesn't fix the issue
+        else:
+            next_copy = -1
+
         if data and 'posts' in data:
             posts = data['posts']
             if len(all_posts):
@@ -89,11 +103,16 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
             for post in posts:
                 # Get post creation date (milliseconds)
                 post_time = int(post['created'])
-                post_hour_prev = ((relative_to_time - post_time) / (60 * 60 * 1000))
+                new_hour_prev = ((relative_to_time - post_time) / (60 * 60 * 1000))
+                if new_hour_prev < post_hour_prev:
+                    print(f"Error with fetch occurred. Last time {post_hour_prev}, current {new_hour_prev}\n"
+                          f"Community: {community}\nFrom id: {from_id}"
+                          f"Posts: {all_posts}")
+                    return all_posts
+                post_hour_prev = new_hour_prev
                 # If the post is outside the time frame, stop fetching
                 if post_hour_prev > hour_end:
                     return all_posts
-
                 # Add post if within the time frame
                 if post_hour_prev >= hour_start:
                     #  post["slug"] = slugify(post["title"])
@@ -103,7 +122,7 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
 
             # Get the ID of the last post to use for the next request
             if posts:
-                from_id = posts[-1]['uuid']
+                from_id = posts[next_copy]['uuid']
             else:
                 break  # No more posts
         else:
@@ -160,8 +179,10 @@ def calculate_drama_score(up, down, comm):
     drama_score = sentiment_factor * engagement_factor
     return drama_score
 
+
 def calculate_post_drama_score(post):
     return calculate_drama_score(post['score_up'], post['score_down'], post['comments'])
+
 
 def sort_posts_by_drama(posts):
     """
@@ -272,19 +293,25 @@ def add_drama_ranked_comments_to_posts(posts):
     return updated_posts
 
 
-def get_submission_title(post, title_truncate_len=497):
-    title = "["
-    if post["drama_score"] < 0.2:
-        title += ":chudsmug: :2: :3: :4: :5:"
-    elif post["drama_score"] < 0.4:
-        title += ":doomer chud: " * 2 + " :3: :4: :5:"
-    elif post["drama_score"] < 0.6:
-        title += ":chudconcerned: " * 3 + " :4: :5:"
-    elif post["drama_score"] < 0.8:
-        title += ":chudseethe: " * 4 + ":5:"
+def numeric_score_to_string_descriptor(score):
+    if score == 0:
+        return "[ :1: :2: :3: :4: :5: ]"
+    descriptor = "[ "
+    if score < 0.2:
+        descriptor += ":chudsmug: :2: :3: :4: :5:"
+    elif score < 0.4:
+        descriptor += ":doomerchud: " * 2 + " :3: :4: :5:"
+    elif score < 0.6:
+        descriptor += ":chudconcerned: " * 3 + " :4: :5:"
+    elif score < 0.8:
+        descriptor += ":chudseethe: " * 4 + ":5:"
     else:
-        title += ":chudrage: " * 5
-    title += "] "
+        descriptor += ":chudrage: " * 5
+    descriptor += "] "
+    return descriptor
+
+def get_singlepost_submission_title(post, title_truncate_len=497):
+    title = numeric_score_to_string_descriptor(post["drama_score"])
     title += post["title"]
     return title[:title_truncate_len] + "..." if len(title) > title_truncate_len else title
 
@@ -347,7 +374,7 @@ def get_rdrama_submit_format_for_one_post(post):
     """
     submission = {"title": "", "body": "", "link": ""}
     include_comments = min(5, len(post["comments"]))
-    submission["title"] = get_submission_title(post)
+    submission["title"] = get_singlepost_submission_title(post)
     if not post["link"]:
         post = get_finalized_post_urls(post)
     submission['link'] = post['link'] + '?commentSort=controversial'
@@ -360,4 +387,40 @@ def get_rdrama_submit_format_for_one_post(post):
     submission[
         "body"] += ":marseysnappy: *'autodrama' for scored (thanks HeyMoon). Ping @GatanKot about bugs or " \
                    "ideas* :marseyagree:"
+    return submission
+
+
+def get_catalogue_title():
+    current_date = datetime.now()
+    formatted_date = current_date.strftime("%Y-%m-%d")
+    title = f"Daily Scored Drama Report :chudrage: {formatted_date}"
+    return title
+
+
+def get_tabulated_catalogue_posts(posts, title_char_max_len=88):
+    html_str = "<table>\n"
+    table_headers = ["Score", "Post", "Community", "Votes", "Comments"]
+    html_str += "<tr>\n"
+    for header in table_headers:
+        html_str += f"<th>{header}</th>\n"
+    html_str += "</tr>"
+    for post in posts:
+        html_str += "<tr>"
+        html_str += f"<td>{numeric_score_to_string_descriptor(post['drama_score'])}</td>\n"
+        html_str += f"<td><a href={post['salted_link']}>" \
+                    f"{post['title'][:title_char_max_len] + '...' if len(post['title']) > title_char_max_len else post['title']}" \
+                    f"</a></td>\n"
+        html_str += f"<td>{post['community']}</td>\n"
+        html_str += f"<td>(+{post['score_up']}/-{post['score_down']})</td>\n"
+        html_str += f"<td>{post['comments']}</td>\n"
+        html_str += "</tr>\n"
+    html_str += "</table>\n"
+    return html_str
+
+
+def get_rdrama_submit_format_for_catalogue(posts):
+    submission = {"title": get_catalogue_title(), "body": "#### Top Drama\n", "link": ""}
+    submission["body"] += get_tabulated_catalogue_posts(posts)
+    submission["body"] += ":marseysnappy: *'autodrama' for scored (thanks HeyMoon). Ping @GatanKot about bugs or " \
+                          "ideas* :marseyagree:"
     return submission

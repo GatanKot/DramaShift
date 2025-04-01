@@ -4,11 +4,24 @@ Autodrama but for other sites. Currently scored.co communities.
 Gets all posts from community within a timeframe and filters them by drama, 
 then finds the most dramatic comments and posts them formatted to rdrama.
 
-Near Planned:
+Main:
 
-Improve drama sort
+Drama report
+
+Drama post submission
+
+Minor:
+
+Drama sort 
+
+Graphs ratio vs comments vs drama score for adjustment
+
+Near Planned:
 
 Unit tests 
 
-Drama report 
+Clean up submission formatting
 
+Comment controversy drama sort tiebreaker
+
+Monitor API failure bug
