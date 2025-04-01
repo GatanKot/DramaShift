@@ -6,7 +6,7 @@ scored_communities = ['consumeproduct', 'greatawakening', 'thedonald']
 
 def get_scored_post_submission():
     # Fetch a community's posts between x hours ago and y hours ago
-    filtered_posts = ScoredWrapper.fetch_posts_in_timeframe(community="consumeproduct", hour_start=1, hour_end=25)
+    filtered_posts = ScoredWrapper.fetch_posts_in_timeframe(community="thedonald", hour_start=1, hour_end=31)
     # sort posts by drama
     controversial_posts = ScoredWrapper.sort_posts_by_drama(filtered_posts)
     # take the top post and add a list of comments ranked by drama
@@ -32,7 +32,7 @@ def post_rdrama_report(rdrama_p: RDramaAPIInterface, post):
 
 def get_rdrama_api():
     TEST_AUTH_TOKEN = ""
-    if True:
+    if False:
         website = "localhost"
         auth = TEST_AUTH_TOKEN
         https = False
@@ -50,7 +50,7 @@ def get_rdrama_api():
 if __name__ == "__main__":
     rdrama = get_rdrama_api()
     scored_submission = get_scored_post_submission()
-    if True:
-        print(scored_submission)
-        input()
+
+    print(scored_submission)
+    input()
     post_rdrama_report(rdrama, scored_submission)

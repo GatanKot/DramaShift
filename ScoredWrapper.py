@@ -2,6 +2,13 @@ import requests
 import time
 import math
 import re
+from scipy.stats import beta
+
+from selenium import webdriver
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.edge.options import Options
+from selenium.webdriver.common.by import By
+
 
 
 ## TODO: I am counting child nodes for reply count, but we should find all children of these nodes and use THAT as
@@ -12,35 +19,39 @@ import re
 ## TODO: This finds just controversial posts, but delusions themselves are drama-worthy, which are unanimous, and controversy may be in comments of big threads
 ## i.e. a thread of 10k comments likely has subthread more dramatic than niche post elsewhere
 
-
-def slugify(title, max_length=32):
-    # Replace apostrophes and other non-alphanumeric characters
-    title = title.replace("’", "'")  # Replace special apostrophes
-    # Remove all characters that are not alphanumeric or spaces
-    slug = re.sub(r'[^a-zA-Z0-9\s-]', '', title.lower())  # Keep hyphens in the slug
-
-    # Replace spaces with hyphens
-    slug = slug.replace(" ", "-")
-
-    # Ensure the slug does not exceed the max length
-    if len(slug) > max_length:
-        slug = slug[:max_length].rsplit("-", 1)[0]  # Truncate and remove partial word
-
-    return slug
+## TODO Add unscored delete comparison unscored.arete.network/c/{community}/p/uuidofpost
 
 
-# def get_posts(page_url):
-#     headers = {
-#         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-#                       "Chrome/58.0.3029.110 Safari/537.36"
-#     }
-#
-#     response = requests.get(page_url, headers=headers)
-#     if response.status_code == 200:
-#         return response.text
-#     else:
-#         return None
+def get_slugified_url(url, driver_path=r'C:\Program Files\WebDriver_proj\msedgedriver.exe'):
+    # Set up Edge options
+    options = Options()
+    options.add_argument('--headless')  # Run in headless mode (optional)
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
 
+    # Initialize the Edge driver
+    service = Service(driver_path)
+    driver = webdriver.Edge(service=service, options=options)
+
+    # Open the page
+    driver.get(url)
+
+    try:
+        # Search for the first link that matches the specific pattern
+        # Adjust the selector for a link with href in the format /c/{community}/p/{uuid}/{slug}/c
+        link_element = driver.find_element(By.XPATH,
+                                           "//a[contains(@href, '/c/') and contains(@href, '/p/') and contains(@href, '/c')]")
+
+        # Extract the href attribute
+        href = link_element.get_attribute('href')
+        return href  # Return the link
+    except Exception as e:
+        print(f"Error: {e}")
+        return None  # Return None if no link is found
+
+    finally:
+        # Close the driver
+        driver.quit()
 
 def get_posts(from_id=None, sort='new', community=None):
     url = "https://scored.co/api/v2/post/" + sort + "v2.json"
@@ -85,8 +96,9 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
 
                 # Add post if within the time frame
                 if post_hour_prev >= hour_start:
-                    post["slug"] = slugify(post["title"])
-                    post["link"] = f"https://scored.co/c/{community}/p/{post['uuid']}/{post['slug']}/c"
+                    #  post["slug"] = slugify(post["title"])
+                    post["salted_link"] = f"https://scored.co/c/{community}/p/{post['uuid']}/c"
+                    post["link"] = ""
                     all_posts.append(post)
 
             # Get the ID of the last post to use for the next request
@@ -100,32 +112,56 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
     return all_posts
 
 
-def calculate_drama_score(post, max_comments):
-    # Vote Engagement, Vote Lean, Comment Engagement, Comment Lean, Topic Interest
-    U = post.get('score_up', 0)
-    D = post.get('score_down', 0)
-    C = post.get('comments', 0)
-
-    total_votes = U + D
+def calculate_drama_score(up, down, comm):
+    """
+    Calculates the drama of a post using only up, down votes and comments. Time not controlled.
+    Think of it as: up / down ratio estimates sentiment, sentiment_factor peaks at half 'agree' half 'disagree'
+    Max comment engagement can only reach the limit of sentiment_factor. Piecewise function means you have diminishing
+    returns after ~50 comments peaking at ~3000. Unit tests have examples but e.g.
+    + 1  / - 1,  0 comments     = + 1000/ - 0, 3000 comments            = + 0 / - 100, 0 comments   ()      0.0
+    + 50 / - 50, 28             = + 920 / - 80, 3000                    = + 0 / - 100, 47           (*)     0.2
+    + 50 / - 50, 58             = + 880 / - 120, 3000                   = + 0 / - 100, 114          (**)    0.4
+    + 50 / - 50, 97             = + 680 / - 320, 3000                   = + 0 / - 100, 3000         (***)   0.6
+    + 500 / - 500, 170          = + 720 / - 280, 3000                   = + 180 / - 820, 3000       (****)  0.8
+    + 500 / - 500, 3000         = + 500 / - 500, 3000                   = + 500 / - 500, 3000       (*****) 1.0
+    todo high comment counts at intermediate controversiality are underweighted,
+    :param up
+    :param down
+    :param comm
+    :return: value between 0 and 1 higher is more dramatic
+    """
+    total_votes = up + down
     if total_votes == 0:
-        return 0  # No votes, no controversy
+        return 0  # maybe a few comments but unlikely to have drama
+    ratio = up / (up + down)
 
-    # Vote Controversy Score (VCS)
-    VCS = (1 - abs(U - D) / (total_votes + 1)) * math.log(1 + total_votes)
+    #  piecewise from desmos
 
-    # Downvote-Based Controversy Boost (DBCB)
-    DBCB = D / (total_votes + 1)
-
-    # Engagement Score (E)
-    if max_comments > 0:
-        E = math.log(1 + C) / math.log(1 + max_comments)
+    if ratio <= 0.5:  # high negative sentiment is more dramatic
+        if ratio < 0.1825:
+            sentiment_factor = min(1, 0.6 + 6 * (ratio ** 2))
+        else:
+            sentiment_factor = min(1, 1 - 1.985 * ((ratio - 0.5) ** 2))
     else:
-        E = 0
+        if ratio > 0.884:
+            sentiment_factor = min(1, 6 * ((ratio - 1) ** 2))
+        else:
+            sentiment_factor = min(1, 1 - 4.058 * ((ratio - 0.5) ** 2))
+    if comm < 28:
+        engagement_factor = (comm ** 3) / 100000
+    elif comm < 58:
+        engagement_factor = 0.2 + (comm - 27.144) / 150
+    elif comm < 97:
+        engagement_factor = 0.4 + ((comm - 57.144) ** 0.875) / 125
+    elif comm < 170:
+        engagement_factor = 0.6 + ((comm - 96.739) ** 0.75) / 125
+    else:
+        engagement_factor = 0.8 + ((comm - 169.83) ** 0.4) / 125  # exceeds 1 at 3296
+    drama_score = sentiment_factor * engagement_factor
+    return drama_score
 
-    # Final Controversy Score
-    FCS = (VCS * 0.5) + (DBCB * 0.3) + (E * 0.2)
-    return FCS
-
+def calculate_post_drama_score(post):
+    return calculate_drama_score(post['score_up'], post['score_down'], post['comments'])
 
 def sort_posts_by_drama(posts):
     """
@@ -141,7 +177,7 @@ def sort_posts_by_drama(posts):
 
     # Compute scores and add as field
     for post in posts:
-        post["drama_score"] = calculate_drama_score(post, max_comments)
+        post["drama_score"] = calculate_post_drama_score(post)
 
     # Sort posts by score in descending order
     ranked_posts = sorted(posts, key=lambda p: p["drama_score"], reverse=True)
@@ -149,7 +185,7 @@ def sort_posts_by_drama(posts):
     return ranked_posts
 
 
-def fetch_post_comments(id, uuid, slug):
+def fetch_post_comments(id):
     url = f"https://api.scored.co/api/v2/post/post.json?id={id}&comments=true&commentSort=controversial"
     response = requests.get(url)
 
@@ -170,7 +206,6 @@ def fetch_post_comments(id, uuid, slug):
     for comment in data.get("comments", []):
         post_info["comments"].append({
             "username": comment.get("author", "Unknown"),
-            "permalink": f"https://scored.co/c/{comment.get('community', '')}/p/{uuid}/{slug}/c/{comment.get('uuid', '')}",
             "score": comment.get("score", 0),
             "score_up": comment.get("score_up", 0),
             "score_down": comment.get("score_down", 0),
@@ -229,9 +264,7 @@ def add_drama_ranked_comments_to_posts(posts):
 
     for post in posts:
         id = post["id"]
-        uuid = post["uuid"]
-        slug = post["slug"]
-        comments = fetch_post_comments(id, uuid, slug)
+        comments = fetch_post_comments(id)
         ranked_comments = rank_controversial_comments(comments)
 
         updated_posts.append({**post, "comments": ranked_comments})
@@ -271,7 +304,7 @@ def strip_text(text):
     return text
 
 
-def submission_comment_add(comment, text_truncate_len=280):
+def submission_comment_add(comment, text_truncate_len=400):
     text = ""
     comment_parent = comment["comment_parent"]
     if comment_parent:
@@ -296,6 +329,16 @@ def get_post_body_summary(post, text_truncate_len=1000):
     return text
 
 
+def get_finalized_post_urls(post):
+    slug_url = get_slugified_url(post["salted_link"])
+    post["link"] = slug_url
+    linked_comments = post["comments"]
+    for comment in linked_comments:
+        comment["permalink"] = post['link'] + f"/{comment['uuid']}"
+    post["comments"] = linked_comments  # idk about python copy stuff
+    return post
+
+
 def get_rdrama_submit_format_for_one_post(post):
     """
     Returns a submission struct with a title, link, and text body strings.
@@ -305,7 +348,9 @@ def get_rdrama_submit_format_for_one_post(post):
     submission = {"title": "", "body": "", "link": ""}
     include_comments = min(5, len(post["comments"]))
     submission["title"] = get_submission_title(post)
-    submission['link'] = post['link']
+    if not post["link"]:
+        post = get_finalized_post_urls(post)
+    submission['link'] = post['link'] + '?commentSort=controversial'
     submission["body"] = get_post_body_summary(post)
     submission['body'] += "#### Most Dramatic Comments \n\n"
     # TODO - don't include duplicate comments e.g. both parent and child separately, or multiple childs of same parent combine
