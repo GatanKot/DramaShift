@@ -104,6 +104,7 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
                 # Get post creation date (milliseconds)
                 post_time = int(post['created'])
                 new_hour_prev = ((relative_to_time - post_time) / (60 * 60 * 1000))
+                print(new_hour_prev)
                 if new_hour_prev < post_hour_prev:
                     print(f"Error with fetch occurred. Last time {post_hour_prev}, current {new_hour_prev}\n"
                           f"Community: {community}\nFrom id: {from_id}"
@@ -393,7 +394,7 @@ def get_rdrama_submit_format_for_one_post(post):
 def get_catalogue_title():
     current_date = datetime.now()
     formatted_date = current_date.strftime("%Y-%m-%d")
-    title = f"Daily Scored Drama Report :chudrage: {formatted_date}"
+    title = f"Scored.co Drama Report :chudrage: {formatted_date}"
     return title
 
 

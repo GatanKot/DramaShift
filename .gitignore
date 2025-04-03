@@ -1,6 +1,9 @@
 # Ignore the private key file
 rdrama_auth_token
 
+# Ignore notes
+notes.txt
+
 # Ignore common Python files
 __pycache__/
 *.pyc
