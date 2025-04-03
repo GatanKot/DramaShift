@@ -2,9 +2,9 @@ from datetime import datetime
 
 import requests
 import time
+from tqdm import tqdm
 import math
 import re
-from scipy.stats import beta
 
 from selenium import webdriver
 from selenium.webdriver.edge.service import Service
@@ -80,21 +80,19 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
     if not relative_to_time:
         relative_to_time = int(time.time() * 1000)  # current time
 
+    total_steps = int(hour_end)
+    progress_bar = tqdm(total=total_steps, desc="Fetching Posts", unit="hour")
+
     all_posts = []
     from_id = None
-    next_copy = -1
     post_hour_prev = 0
-    while True:
+    complete = False
+    while not complete:
         data = get_posts(from_id, community=community, sort='new')
-        if not data['has_more_entries']:  # if has_more_entries is false the data we got is bad, we can pull from a different index
-            next_copy -= 1
-            print(f"No more entries: {data}\nTrying {next_copy}")  # gather page of posts from new starting at last
-            from_id = all_posts[next_copy]['uuid']
-            print(f"Couldn't fetch from {community} past {post_hour_prev}")
-            print(f"New uuid: {from_id}")
-            return all_posts   # above  doesn't fix the issue
-        else:
-            next_copy = -1
+        if not data['has_more_entries']:  # likely hit the limit, which is ~1000 from testing
+            print(f"No more post entries past last batch starting from i={len(all_posts)} in community '{community}' "
+                  f"past hour {post_hour_prev}.\nReturning as is, timeframe was clipped.")
+            break
 
         if data and 'posts' in data:
             posts = data['posts']
@@ -104,31 +102,35 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
                 # Get post creation date (milliseconds)
                 post_time = int(post['created'])
                 new_hour_prev = ((relative_to_time - post_time) / (60 * 60 * 1000))
-                print(new_hour_prev)
                 if new_hour_prev < post_hour_prev:
                     print(f"Error with fetch occurred. Last time {post_hour_prev}, current {new_hour_prev}\n"
                           f"Community: {community}\nFrom id: {from_id}"
                           f"Posts: {all_posts}")
-                    return all_posts
+                    complete = True
+                    break
                 post_hour_prev = new_hour_prev
                 # If the post is outside the time frame, stop fetching
                 if post_hour_prev > hour_end:
-                    return all_posts
+                    complete = True
+                    break
+                progress_bar.n = round(new_hour_prev, 2)
+                progress_bar.refresh()
                 # Add post if within the time frame
                 if post_hour_prev >= hour_start:
-                    #  post["slug"] = slugify(post["title"])
                     post["salted_link"] = f"https://scored.co/c/{community}/p/{post['uuid']}/c"
                     post["link"] = ""
                     all_posts.append(post)
 
             # Get the ID of the last post to use for the next request
             if posts:
-                from_id = posts[next_copy]['uuid']
+                from_id = posts[-1]['uuid']
             else:
                 break  # No more posts
         else:
             break  # No data or error
-
+    progress_bar.n = total_steps  # Set progress to 100%
+    progress_bar.refresh()
+    progress_bar.close()
     return all_posts
 
 
@@ -144,7 +146,7 @@ def calculate_drama_score(up, down, comm):
     + 50 / - 50, 97             = + 680 / - 320, 3000                   = + 0 / - 100, 3000         (***)   0.6
     + 500 / - 500, 170          = + 720 / - 280, 3000                   = + 180 / - 820, 3000       (****)  0.8
     + 500 / - 500, 3000         = + 500 / - 500, 3000                   = + 500 / - 500, 3000       (*****) 1.0
-    todo high comment counts at intermediate controversiality are underweighted,
+
     :param up
     :param down
     :param comm
@@ -193,9 +195,6 @@ def sort_posts_by_drama(posts):
     """
     if not posts:
         return []
-
-    # Find max comments for normalization
-    max_comments = max(post.get('comments', 0) for post in posts)
 
     # Compute scores and add as field
     for post in posts:
@@ -310,6 +309,7 @@ def numeric_score_to_string_descriptor(score):
         descriptor += ":chudrage: " * 5
     descriptor += "] "
     return descriptor
+
 
 def get_singlepost_submission_title(post, title_truncate_len=497):
     title = numeric_score_to_string_descriptor(post["drama_score"])
