@@ -12,12 +12,12 @@ from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
 from selenium.webdriver.common.by import By
 
+from SimplePostProgress import SimplePostProgress
+
 
 ## TODO: I am counting child nodes for reply count, but we should find all children of these nodes and use THAT as
 ## count, but direct children matter more. Algo.
 
-## TODO improve controversy / engagement (drama) algo
-## TODO: just grab post info don't do it multiple times. Monitor times which were pulled and store.
 ## TODO: This finds just controversial posts, but delusions themselves are drama-worthy, which are unanimous, and controversy may be in comments of big threads
 ## i.e. a thread of 10k comments likely has subthread more dramatic than niche post elsewhere
 
@@ -67,75 +67,96 @@ def get_posts(from_id=None, sort='new', community=None, rate_limit_s=1):
     return response.json() if response.status_code == 200 else None
 
 
-def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduct", relative_to_time=0):
-    """
-    get all posts from community that fall within time frame
-    [current time - hour_start hours, current time - hour_end hours]
-
-    :param relative_to_time: time in ms since last epoch that hour end and hour start are relative to
-    :param hour_end: posts before hour_end hours before relative_to_time will be ignored
-    :param hour_start: posts after hour_start hours before relative_to_time will be ignored
-    :param community: name of scored.co/c/{community} e.g. consumeproduct, thedonald
-    :return: list of post dicts
-    """
-    if not relative_to_time:
-        relative_to_time = int(time.time() * 1000)  # current time
-
-    total_steps = int(hour_end)
-    progress_bar = tqdm(total=total_steps, desc=f"Fetching Posts ({community})", unit="hour")
-
+def fetch_posts_until(callback, community="consumeproduct", from_id=None):
+    print(f"Fetching posts from {community}.")
     all_posts = []
-    from_id = None
-    post_hour_prev = 0
+    from_id = from_id
     complete = False
+    progress = SimplePostProgress()
+    t = 0
     while not complete:
         data = get_posts(from_id, community=community, sort='new')
-        if not data['has_more_entries']:  # likely hit the limit, which is ~1000 from testing
-            print(f"No more post entries past last batch starting from i={len(all_posts)} in community '{community}' "
-                  f"past hour {round(post_hour_prev,2)}.\nReturning as is, timeframe was clipped.")
+        if not data or 'posts' not in data:
+            break
+        posts = data['posts']
+        if len(all_posts):
+            posts = posts[1:]  # remove duplicate
+        else:
+            t = posts[0]['created']
+
+        for post in posts:
+            if t < post['created']:
+                print(f"Looped to start {post}, {all_posts[-1]}\n{data}")
+                complete = True
+                break
+            t = post['created']
+            if not callback(post):
+                complete = True
+                break
+            progress.update(len(all_posts))
+            post["salted_link"] = f"https://scored.co/c/{community}/p/{post['uuid']}/c"
+            post["link"] = ""
+            post['finalized'] = False
+            all_posts.append(post)
+        if posts:
+            from_id = posts[-1]['uuid']
+        else:
             break
 
-        if data and 'posts' in data:
-            posts = data['posts']
-            if len(all_posts):
-                posts = posts[1:]  # remove duplicate entry (we fetch from last uuid inclusive)
-            for post in posts:
-                # Get post creation date (milliseconds)
-                post_time = int(post['created'])
-                new_hour_prev = ((relative_to_time - post_time) / (60 * 60 * 1000))
-                if new_hour_prev < post_hour_prev:
-                    print(f"Error with fetch occurred. Last time {post_hour_prev}, current {new_hour_prev}\n"
-                          f"Community: {community}\nFrom id: {from_id}"
-                          f"Posts: {all_posts}")
-                    complete = True
-                    break
-                post_hour_prev = new_hour_prev
-                # If the post is outside the time frame, stop fetching
-                if post_hour_prev > hour_end:
-                    complete = True
-                    break
-                progress_bar.n = round(new_hour_prev, 2)
-                progress_bar.refresh()
-                # Add post if within the time frame
-                if post_hour_prev >= hour_start:
-                    post["salted_link"] = f"https://scored.co/c/{community}/p/{post['uuid']}/c"
-                    post["link"] = ""
-                    all_posts.append(post)
+        if not data['has_more_entries']:
+            progress.close()
+            return all_posts, len(all_posts) - 1
+    progress.close()
+    return all_posts, None
 
-            # Get the ID of the last post to use for the next request
-            if posts:
-                from_id = posts[-1]['uuid']
-            else:
-                break  # No more posts
-        else:
-            break  # No data or error
-    progress_bar.n = total_steps  # Set progress to 100%
-    progress_bar.refresh()
-    progress_bar.close()
-    return all_posts
 
-def fetch_posts_till_time(community, t):
-    return None
+# Wrapper that mimics original function signature
+def fetch_posts_in_timeframe(hour_end=25, community="consumeproduct", relative_to_time=0):
+    if not relative_to_time:
+        relative_to_time = int(time.time() * 1000)
+
+    def within_timeframe(post):
+        post_time = int(post['created'])
+        post_hour_prev = ((relative_to_time - post_time) / (60 * 60 * 1000))
+        return hour_end >= post_hour_prev
+
+    posts, stop_index = fetch_posts_until(within_timeframe, community=community)
+    return posts
+
+
+# Another usage with UUID stopping condition
+def fetch_posts_until_uuid(stop_uuid, community="consumeproduct"):
+    def until_uuid(post):
+        return post['uuid'] != stop_uuid
+
+    posts, stop_index = fetch_posts_until(until_uuid, community=community)
+    return posts, stop_index
+
+
+# Another usage with UUID stopping condition
+def fetch_posts_finalize(start_uuid, posts, community="consumeproduct"):
+    def until_found_finalized(post):
+        # Check if post['uuid'] exists in the posts DataFrame
+        post_in_df = posts[posts['uuid'] == post['uuid']]
+
+        if post_in_df.empty:
+            return True  # If the post uuid is not found in the dataframe, return True
+
+        # Check if 'finalized' exists in the row and return whether it's not True
+        return post_in_df.iloc[0].get('finalized', False) != True
+
+    posts, stop_index = fetch_posts_until(until_found_finalized, community=community, from_id=start_uuid)
+    for new_post in posts:
+        new_post['finalized'] = True
+    return posts, stop_index
+
+
+def fetch_posts_until_epoch_t(epoch_t, community="consumeproduct"):
+    def until_t(post):
+        return post['created'] > epoch_t
+
+    posts, stop_index = fetch_posts_until(until_t, community=community)
+    return posts, stop_index
 
 
 def calculate_drama_score_vectorized(up, down, comm, in_ratio=None):
@@ -146,7 +167,7 @@ def calculate_drama_score_vectorized(up, down, comm, in_ratio=None):
         ratio = np.asarray(in_ratio, dtype=np.float64)
     else:
         total_votes = up + down
-        ratio = np.divide(up, total_votes, where=total_votes!=0, out=np.zeros_like(up, dtype=np.float64))
+        ratio = np.divide(up, total_votes, where=total_votes != 0, out=np.zeros_like(up, dtype=np.float64))
 
     # Sentiment Factor (vectorized piecewise function)
     sentiment_factor = np.where(
@@ -254,8 +275,17 @@ def calculate_drama_score_vectorized_tup(x, y):
                                             down=(1 - x) * (x + 1),  # Similarly handle downvotes
                                             comm=y)
 
+
 def calculate_post_drama_score(post):
     return calculate_drama_score(post['score_up'], post['score_down'], post['comments'])
+
+
+def apply_drama_scores(df):
+    df['drama_score'] = df.apply(
+        lambda row: calculate_drama_score(row['score_up'], row['score_down'], row['comments']),
+        axis=1
+    )
+    return df
 
 
 def sort_posts_by_drama(posts):
@@ -496,5 +526,3 @@ def get_rdrama_submit_format_for_catalogue(posts):
     submission["body"] += ":marseysnappy: *'autodrama' for scored (thanks HeyMoon). Ping @GatanKot about bugs or " \
                           "ideas* :marseyagree:"
     return submission
-
-
