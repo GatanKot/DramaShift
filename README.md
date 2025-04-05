@@ -14,16 +14,12 @@ Minor:
 
 Drama sort 
 
-Graphs ratio vs comments vs drama score for adjustment
+Graph drama
 
 Near Planned:
 
-Run multiple times to gather data, store and wait until later
+Monitor mode
 
 Unit tests 
 
-Clean up submission formatting
-
-Comment controversy drama sort tiebreaker
-
-Monitor API failure bug -- only last 1000 posts accessible?
+Comment controversy drama sort 

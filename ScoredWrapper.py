@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import numpy as np
 import requests
 import time
 from tqdm import tqdm
@@ -72,8 +73,8 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
     [current time - hour_start hours, current time - hour_end hours]
 
     :param relative_to_time: time in ms since last epoch that hour end and hour start are relative to
-    :param hour_end: posts before hour_end hours before current_time will be ignored
-    :param hour_start: posts after hour_start hours before current_time will be ignored
+    :param hour_end: posts before hour_end hours before relative_to_time will be ignored
+    :param hour_start: posts after hour_start hours before relative_to_time will be ignored
     :param community: name of scored.co/c/{community} e.g. consumeproduct, thedonald
     :return: list of post dicts
     """
@@ -81,7 +82,7 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
         relative_to_time = int(time.time() * 1000)  # current time
 
     total_steps = int(hour_end)
-    progress_bar = tqdm(total=total_steps, desc="Fetching Posts", unit="hour")
+    progress_bar = tqdm(total=total_steps, desc=f"Fetching Posts ({community})", unit="hour")
 
     all_posts = []
     from_id = None
@@ -91,7 +92,7 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
         data = get_posts(from_id, community=community, sort='new')
         if not data['has_more_entries']:  # likely hit the limit, which is ~1000 from testing
             print(f"No more post entries past last batch starting from i={len(all_posts)} in community '{community}' "
-                  f"past hour {post_hour_prev}.\nReturning as is, timeframe was clipped.")
+                  f"past hour {round(post_hour_prev,2)}.\nReturning as is, timeframe was clipped.")
             break
 
         if data and 'posts' in data:
@@ -133,8 +134,60 @@ def fetch_posts_in_timeframe(hour_end=25, hour_start=1, community="consumeproduc
     progress_bar.close()
     return all_posts
 
+def fetch_posts_till_time(community, t):
+    return None
 
-def calculate_drama_score(up, down, comm):
+
+def calculate_drama_score_vectorized(up, down, comm, in_ratio=None):
+    """ Fully vectorized version of calculate_drama_score """
+
+    # Compute the ratio
+    if in_ratio is not None:
+        ratio = np.asarray(in_ratio, dtype=np.float64)
+    else:
+        total_votes = up + down
+        ratio = np.divide(up, total_votes, where=total_votes!=0, out=np.zeros_like(up, dtype=np.float64))
+
+    # Sentiment Factor (vectorized piecewise function)
+    sentiment_factor = np.where(
+        ratio <= 0.5,
+        np.where(
+            ratio < 0.1825,
+            np.minimum(1, 0.6 + 6 * (ratio ** 2)),
+            np.minimum(1, 1 - 1.985 * ((ratio - 0.5) ** 2))
+        ),
+        np.where(
+            ratio > 0.884,
+            np.minimum(1, 6 * ((ratio - 1) ** 2)),
+            np.minimum(1, 1 - 4.058 * ((ratio - 0.5) ** 2))
+        )
+    )
+
+    # Engagement Factor (vectorized piecewise function)
+    engagement_factor = np.where(
+        comm < 28,
+        (comm ** 3) / 100000,
+        np.where(
+            comm < 58,
+            0.2 + (comm - 27.144) / 150,
+            np.where(
+                comm < 97,
+                0.4 + ((comm - 57.144) ** 0.875) / 125,
+                np.where(
+                    comm < 170,
+                    0.6 + ((comm - 96.739) ** 0.75) / 125,
+                    0.8 + ((comm - 169.83) ** 0.4) / 125  # exceeds 1 at 3296
+                )
+            )
+        )
+    )
+
+    # Compute drama score
+    drama_score = sentiment_factor * engagement_factor
+    return drama_score
+
+
+def calculate_drama_score(up=0, down=0, comm=0, in_ratio=None):
     """
     Calculates the drama of a post using only up, down votes and comments. Time not controlled.
     Think of it as: up / down ratio estimates sentiment, sentiment_factor peaks at half 'agree' half 'disagree'
@@ -147,15 +200,19 @@ def calculate_drama_score(up, down, comm):
     + 500 / - 500, 170          = + 720 / - 280, 3000                   = + 180 / - 820, 3000       (****)  0.8
     + 500 / - 500, 3000         = + 500 / - 500, 3000                   = + 500 / - 500, 3000       (*****) 1.0
 
+    :param in_ratio: workaround for DramaGraph
     :param up
     :param down
     :param comm
     :return: value between 0 and 1 higher is more dramatic
     """
-    total_votes = up + down
-    if total_votes == 0:
-        return 0  # maybe a few comments but unlikely to have drama
-    ratio = up / (up + down)
+    if in_ratio:
+        ratio = in_ratio
+    else:
+        total_votes = up + down
+        if total_votes == 0:
+            return 0  # maybe a few comments but unlikely to have drama
+        ratio = up / (up + down)
 
     #  piecewise from desmos
 
@@ -182,6 +239,20 @@ def calculate_drama_score(up, down, comm):
     drama_score = sentiment_factor * engagement_factor
     return drama_score
 
+
+def calculate_drama_score_vectorized_tup(x, y):
+    """
+    Vectorized function equivalent to calling calculate_drama_score with in_ratio=x and comm=y.
+    """
+    # Ensure that inputs are numpy arrays for element-wise operations
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+
+    # We assume `calculate_drama_score_vectorized` is already vectorized,
+    # so we can call it directly for each element-wise pair (x, y).
+    return calculate_drama_score_vectorized(up=x * (x + 1),  # Just an example of how you would use x
+                                            down=(1 - x) * (x + 1),  # Similarly handle downvotes
+                                            comm=y)
 
 def calculate_post_drama_score(post):
     return calculate_drama_score(post['score_up'], post['score_down'], post['comments'])
@@ -425,3 +496,5 @@ def get_rdrama_submit_format_for_catalogue(posts):
     submission["body"] += ":marseysnappy: *'autodrama' for scored (thanks HeyMoon). Ping @GatanKot about bugs or " \
                           "ideas* :marseyagree:"
     return submission
+
+

@@ -4,6 +4,10 @@ rdrama_auth_token
 # Ignore notes
 notes.txt
 
+# Ignore stored data
+stored_posts.npy
+images_ds/
+
 # Ignore common Python files
 __pycache__/
 *.pyc
