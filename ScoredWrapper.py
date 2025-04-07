@@ -121,7 +121,7 @@ def fetch_posts_in_timeframe(hour_end=25, community="consumeproduct", relative_t
         return hour_end >= post_hour_prev
 
     posts, stop_index = fetch_posts_until(within_timeframe, community=community)
-    return posts
+    return posts, stop_index
 
 
 # Another usage with UUID stopping condition
@@ -134,11 +134,13 @@ def fetch_posts_until_uuid(stop_uuid, community="consumeproduct"):
 
 
 # Another usage with UUID stopping condition
-def fetch_posts_finalize(start_uuid, posts, community="consumeproduct"):
+def fetch_posts_finalize(start_uuid, c_time, posts, community="consumeproduct"):
     def until_found_finalized(post):
         # Check if post['uuid'] exists in the posts DataFrame
         post_in_df = posts[posts['uuid'] == post['uuid']]
-
+        if post['created'] > c_time:
+            print(f"Bug where post {post} passed before expected time {c_time}.")
+            return False
         if post_in_df.empty:
             return True  # If the post uuid is not found in the dataframe, return True
 
@@ -243,7 +245,7 @@ def calculate_drama_score(up=0, down=0, comm=0, in_ratio=None):
         else:
             sentiment_factor = min(1, 1 - 1.985 * ((ratio - 0.5) ** 2))
     else:
-        if ratio > 0.884:
+        if ratio > 0.93:
             sentiment_factor = min(1, 6 * ((ratio - 1) ** 2))
         else:
             sentiment_factor = min(1, 1 - 4.058 * ((ratio - 0.5) ** 2))
