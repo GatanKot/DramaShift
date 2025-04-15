@@ -398,16 +398,16 @@ def add_drama_ranked_comments_to_posts(posts):
 
 def numeric_score_to_string_descriptor(score):
     if score == 0:
-        return "[ :1: :2: :3: :4: :5: ]"
+        return "[ :chudcheers: ]"
     descriptor = "[ "
     if score < 0.2:
-        descriptor += ":chudsmug: :2: :3: :4: :5:"
+        descriptor += ":chudsmug: "
     elif score < 0.4:
-        descriptor += ":doomerchud: " * 2 + " :3: :4: :5:"
+        descriptor += ":doomerchud: " * 2
     elif score < 0.6:
-        descriptor += ":chudconcerned: " * 3 + " :4: :5:"
+        descriptor += ":chudconcerned: " * 3
     elif score < 0.8:
-        descriptor += ":chudseethe: " * 4 + ":5:"
+        descriptor += ":chudseethe: " * 4
     else:
         descriptor += ":chudrage: " * 5
     descriptor += "] "
@@ -489,7 +489,7 @@ def get_rdrama_submit_format_for_one_post(post):
         submission["body"] += submission_comment_add(post["comments"][i])
     submission["body"] += "---\n\n"
     submission[
-        "body"] += ":marseysnappy: *'autodrama' for scored (thanks HeyMoon). Ping @GatanKot about bugs or " \
+        "body"] += ":marseysnappy: *Like HeyMoon's 'autodrama' but for scored. @ GatanKot about bugs or " \
                    "ideas* :marseyagree:"
     return submission
 
@@ -525,6 +525,6 @@ def get_tabulated_catalogue_posts(posts, title_char_max_len=88):
 def get_rdrama_submit_format_for_catalogue(posts):
     submission = {"title": get_catalogue_title(), "body": "#### Top Drama\n", "link": ""}
     submission["body"] += get_tabulated_catalogue_posts(posts)
-    submission["body"] += ":marseysnappy: *'autodrama' for scored (thanks HeyMoon). Ping @GatanKot about bugs or " \
+    submission["body"] += ":marseysnappy: *Like HeyMoon's 'autodrama' but for scored. @ GatanKot about bugs or " \
                           "ideas* :marseyagree:"
     return submission

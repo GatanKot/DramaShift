@@ -1,10 +1,9 @@
 import argparse
 import sys
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import numpy as np
 import pandas as pd
 import pytest as pytest
 
@@ -237,7 +236,7 @@ def get_last_finalized_offset(comm, all_posts, roll_ind):
     return len(rolling_window)
 
 
-def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_communities, time_thresh=5, drama_thresh=0.1, top_n_posts=10):
+def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_communities, time_thresh=5, drama_thresh=0.0, top_n_posts=10):
     comm_status = {'thedonald': {'strategy': 'roll', 'fetch_t': 0, 'roll_ind': 974},  # hardcode for now.
                    'kotakuinaction2': {'strategy': 'fixed', 'fetch_t': 0},
                    'greatawakening': {'strategy': 'fixed', 'fetch_t': 0},
@@ -288,7 +287,7 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
             if time_fetch < time_post:
                 t_wait = time_fetch - current_time
                 if t_wait > 0:
-                    print(f"Waiting to fetch...")
+                    print(f"Waiting until {datetime.fromtimestamp(time_fetch)} to fetch...")
                     updatable_timer(t_wait)
                 else:
                     print(f"Did not wait to fetch.")
@@ -296,7 +295,7 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
             else:
                 t_wait = time_post - current_time
                 if t_wait > 0:
-                    print(f"Waiting to post...")
+                    print(f"Waiting until {datetime.fromtimestamp(time_post)} to post...")
                     updatable_timer(t_wait)
                 else:
                     print(f"Did not wait to post.")
@@ -310,7 +309,7 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
                     roll_ind = comm_status[comm]['roll_ind']
                     # Get all posts from now until the latest post from community comm we have stored
                     epoch_t = get_latest_epoch_t(comm, all_posts)
-                    print(f"Fetch till {epoch_t}")
+                    print(f"Fetch from new until created = {datetime.fromtimestamp(epoch_t / 1000)}")
                     new_posts = fetch_new_posts(comm, epoch_t)
                     all_posts = update_all_posts(all_posts, new_posts)
                     # Determine the latest time a post can be called 'finalized' for their drama score.
@@ -319,7 +318,9 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
                     # Get the uuid of latest finalizable post in community comm
                     fetch_from = get_fetch_from_row(comm_posts, new_finalizable_t)
                     uuid = fetch_from['uuid']
-                    print(f"Fetch from {uuid} all earlier than {new_finalizable_t} till finalized")
+                    print(f"Fetch from {uuid} all earlier created than "
+                          f"{datetime.fromtimestamp(new_finalizable_t / 1000)} "
+                          f"until first finalized found.")
                     # Finalize all posts from that one backward until we can't access or reach another finalized
                     upd_scores = finalize_posts(uuid, fetch_from['created'], comm_posts, comm)
                     all_posts = apply_updates(all_posts, upd_scores)
@@ -331,18 +332,18 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
                     )
             # Get minimum of fetch times
             time_fetch = min([c['fetch_t'] for c in comm_status.values() if c['strategy'] == 'roll'])
-            all_posts = ScoredWrapper.apply_drama_scores(all_posts)  # Just do for newly finalized todo
+            all_posts = ScoredWrapper.apply_drama_scores(all_posts)
             all_posts.to_pickle(POST_STORAGE_FILE)
             post_margin = [(time_post - (time_thresh + 24) * 60 * 60) * 1000, (time_post - time_thresh * 60 * 60) * 1000]
             max_s = all_posts[(all_posts['created'] > post_margin[0]) & (all_posts['created'] < post_margin[1])]
             try:
-                fin_day = max_s[max_s['finalized'] == True].sort_values('drama_score', ascending=False).iloc[0]
                 unfin_day = max_s[max_s['finalized'] == False].sort_values('drama_score', ascending=False).iloc[0]
                 print(
-                    f"Max drama score (finalized): {fin_day['drama_score']}\nTitle: {fin_day['title']}")
+                    f"Daily max drama score (not finalized): {unfin_day['drama_score']}\nTitle: {unfin_day['title']}")
+                fin_day = max_s[max_s['finalized'] == True].sort_values('drama_score', ascending=False).iloc[0]
                 print(
-                    f"Max drama score (not finalized): {unfin_day['drama_score']}\nTitle: {unfin_day['title']}")
-            except IndexError as ie:
+                    f"Daily max drama score (finalized): {fin_day['drama_score']}\nTitle: {fin_day['title']}")
+            except IndexError:
                 pass
             state = 'wait'
             continue
@@ -365,7 +366,7 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
                     print(f"{len(top_controversial_posts)} posts met controversial threshold >= {drama_thresh} for catalogue, skipping.")
                 else:
                     top_controversial_posts = top_controversial_posts.iloc[:top_n_posts]
-                    catalogue_submission = ScoredWrapper.get_rdrama_submit_format_for_catalogue(top_controversial_posts)
+                    catalogue_submission = ScoredWrapper.get_rdrama_submit_format_for_catalogue(top_controversial_posts.to_dict(orient='records'))
                     post_rdrama_report(rdramaapi, catalogue_submission)
                 best_controversial_post = max_s.iloc[0]
                 best_drama_score = best_controversial_post['drama_score']
@@ -380,7 +381,7 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
                 time_post = time_post + 24 * 60 * 60
                 all_posts.to_pickle(POST_STORAGE_FILE)
             except Exception as e:
-                print(f"Bad thing happened {e}")
+                print(f"Bad thing happened: {e}")
             state = 'wait'
             continue
 
