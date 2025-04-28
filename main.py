@@ -362,22 +362,26 @@ def scored_monitor_loop(rdramaapi, daily_post_hour=10, communities=scored_commun
                 # that have at least '0.1' drama points
                 top_controversial_posts = max_s[max_s['drama_score'] > drama_thresh]
                 # post a catalogue if we have 2 or more meeting threshold, otherwise no point
-                if len(top_controversial_posts) < 2:
+                if len(top_controversial_posts) < 3:
                     print(f"{len(top_controversial_posts)} posts met controversial threshold >= {drama_thresh} for catalogue, skipping.")
                 else:
                     top_controversial_posts = top_controversial_posts.iloc[:top_n_posts]
                     catalogue_submission = ScoredWrapper.get_rdrama_submit_format_for_catalogue(top_controversial_posts.to_dict(orient='records'))
                     post_rdrama_report(rdramaapi, catalogue_submission)
-                best_controversial_post = max_s.iloc[0]
-                best_drama_score = best_controversial_post['drama_score']
-                # post our most dramatic
-                if best_drama_score < drama_thresh:
-                    print(
-                        f"Best drama score {best_drama_score} was less than threshold {drama_thresh} - no single submission.")
-                else:
-                    best_posts_with_comments = ScoredWrapper.add_drama_ranked_comments_to_posts([best_controversial_post.to_dict()])
-                    single_submission = ScoredWrapper.get_rdrama_submit_format_for_one_post(best_posts_with_comments[0])
-                    post_rdrama_report(rdramaapi, single_submission)
+                for i in [0, 1]:
+                    try:
+                        best_controversial_post = max_s.iloc[i]
+                    except IndexError:
+                        break
+                    best_drama_score = best_controversial_post['drama_score']
+                    # post our most dramatic
+                    if best_drama_score < drama_thresh:
+                        print(
+                            f"Best drama score {best_drama_score} was less than threshold {drama_thresh} - no single submission.")
+                    else:
+                        best_posts_with_comments = ScoredWrapper.add_drama_ranked_comments_to_posts([best_controversial_post.to_dict()])
+                        single_submission = ScoredWrapper.get_rdrama_submit_format_for_one_post(best_posts_with_comments[0])
+                        post_rdrama_report(rdramaapi, single_submission)
                 time_post = time_post + 24 * 60 * 60
                 all_posts.to_pickle(POST_STORAGE_FILE)
             except Exception as e:
